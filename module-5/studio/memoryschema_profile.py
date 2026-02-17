@@ -4,26 +4,31 @@ from trustcall import create_extractor
 
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables.config import RunnableConfig
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.store.base import BaseStore
 import configuration
+from dotenv import load_dotenv
 
 # Initialize the LLM
-model = ChatOllama(model="llama3.1:8b", temperature=0) 
+load_dotenv()
+model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
-# Schema 
+
+# Schema
 class UserProfile(BaseModel):
-    """ Profile of a user """
+    """Profile of a user"""
+
     user_name: str = Field(description="The user's preferred name")
     user_location: str = Field(description="The user's location")
-    interests: list = Field(description="A list of the user's interests")
+    interests: list[str] = Field(description="A list of the user's interests")
+
 
 # Create the extractor
 trustcall_extractor = create_extractor(
     model,
     tools=[UserProfile],
-    tool_choice="UserProfile", # Enforces use of the UserProfile tool
+    tool_choice="UserProfile",  # Enforces use of the UserProfile tool
 )
 
 # Chatbot instruction
@@ -34,10 +39,10 @@ Here is the memory (it may be empty): {memory}"""
 # Extraction instruction
 TRUSTCALL_INSTRUCTION = """Create or update the memory (JSON doc) to incorporate information from the following conversation:"""
 
-def call_model(state: MessagesState, config: RunnableConfig, store: BaseStore):
 
+def call_model(state: MessagesState, config: RunnableConfig, store: BaseStore):
     """Load memory from the store and use it to personalize the chatbot's response."""
-    
+
     # Get configuration
     configurable = configuration.Configuration.from_runnable_config(config)
 
@@ -54,7 +59,7 @@ def call_model(state: MessagesState, config: RunnableConfig, store: BaseStore):
         formatted_memory = (
             f"Name: {memory_dict.get('user_name', 'Unknown')}\n"
             f"Location: {memory_dict.get('user_location', 'Unknown')}\n"
-            f"Interests: {', '.join(memory_dict.get('interests', []))}"      
+            f"Interests: {', '.join(memory_dict.get('interests', []))}"
         )
     else:
         formatted_memory = None
@@ -63,14 +68,14 @@ def call_model(state: MessagesState, config: RunnableConfig, store: BaseStore):
     system_msg = MODEL_SYSTEM_MESSAGE.format(memory=formatted_memory)
 
     # Respond using memory as well as the chat history
-    response = model.invoke([SystemMessage(content=system_msg)]+state["messages"])
+    response = model.invoke([SystemMessage(content=system_msg)] + state["messages"])
 
     return {"messages": response}
 
-def write_memory(state: MessagesState, config: RunnableConfig, store: BaseStore):
 
+def write_memory(state: MessagesState, config: RunnableConfig, store: BaseStore):
     """Reflect on the chat history and save a memory to the store."""
-    
+
     # Get configuration
     configurable = configuration.Configuration.from_runnable_config(config)
 
@@ -80,13 +85,18 @@ def write_memory(state: MessagesState, config: RunnableConfig, store: BaseStore)
     # Retrieve existing memory from the store
     namespace = ("memory", user_id)
     existing_memory = store.get(namespace, "user_memory")
-        
+
     # Get the profile as the value from the list, and convert it to a JSON doc
     existing_profile = {"UserProfile": existing_memory.value} if existing_memory else None
-    
+
     # Invoke the extractor
-    result = trustcall_extractor.invoke({"messages": [SystemMessage(content=TRUSTCALL_INSTRUCTION)]+state["messages"], "existing": existing_profile})
-    
+    result = trustcall_extractor.invoke(
+        {
+            "messages": [SystemMessage(content=TRUSTCALL_INSTRUCTION)] + state["messages"],
+            "existing": existing_profile,
+        }
+    )
+
     # Get the updated profile as a JSON object
     updated_profile = result["responses"][0].model_dump()
 
@@ -94,8 +104,9 @@ def write_memory(state: MessagesState, config: RunnableConfig, store: BaseStore)
     key = "user_memory"
     store.put(namespace, key, updated_profile)
 
+
 # Define the graph
-builder = StateGraph(MessagesState,config_schema=configuration.Configuration)
+builder = StateGraph(MessagesState, config_schema=configuration.Configuration)
 builder.add_node("call_model", call_model)
 builder.add_node("write_memory", write_memory)
 builder.add_edge(START, "call_model")
