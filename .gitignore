@@ -2,3 +2,4 @@
 __pycache__/
 .venv/
 .langgraph_api/
+.DS_Store
